@@ -77,9 +77,10 @@ __EXPORT int px4_unregister_shutdown_hook(shutdown_hook_t hook);
  *   on success.
  * @param reboot perform a reboot instead of a shutdown
  * @param to_bootloader reboot into bootloader mode (only used if reboot is true)
+ * @param delay_us optional delay in microseconds
  * @return 0 on success, <0 on error
  */
-__EXPORT int px4_shutdown_request(bool reboot, bool to_bootloader);
+__EXPORT int px4_shutdown_request(bool reboot, bool to_bootloader, uint32_t delay_us = 0);
 
 
 /**

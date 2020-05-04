@@ -100,7 +100,7 @@ int px4_unregister_shutdown_hook(shutdown_hook_t hook)
 	return -EINVAL;
 }
 
-int px4_shutdown_request(bool reboot, bool to_bootloader)
+int px4_shutdown_request(bool reboot, bool to_bootloader, uint32_t delay_us)
 {
 	int ret = 0;
 	pthread_mutex_lock(&shutdown_mutex);
@@ -110,7 +110,11 @@ int px4_shutdown_request(bool reboot, bool to_bootloader)
 		px4_systemreset(to_bootloader);
 
 	} else {
+#if defined(BOARD_HAS_POWER_CONTROL)
 		ret = board_shutdown();
+#else
+		PX4_PANIC("board shutdown not available");
+#endif
 	}
 
 	pthread_mutex_unlock(&shutdown_mutex);
@@ -128,20 +132,10 @@ static uint16_t shutdown_counter = 0; ///< count how many times the shutdown wor
 #define SHUTDOWN_ARG_TO_BOOTLOADER (1<<2)
 static uint8_t shutdown_args = 0;
 
-
-static const int max_shutdown_hooks = 1;
+static constexpr int max_shutdown_hooks = 1;
 static shutdown_hook_t shutdown_hooks[max_shutdown_hooks] = {};
 
-
-static const int shutdown_timeout_ms = 5000; ///< force shutdown after this time if modules do not respond in time
-
-
-/**
- * work queue callback method to shutdown.
- * @param arg unused
- */
-static void shutdown_worker(void *arg);
-
+static constexpr int shutdown_timeout_ms = 5000; ///< force shutdown after this time if modules do not respond in time
 
 int px4_register_shutdown_hook(shutdown_hook_t hook)
 {
@@ -175,9 +169,11 @@ int px4_unregister_shutdown_hook(shutdown_hook_t hook)
 	return -EINVAL;
 }
 
-
-
-void shutdown_worker(void *arg)
+/**
+ * work queue callback method to shutdown.
+ * @param arg unused
+ */
+static void shutdown_worker(void *arg)
 {
 	PX4_DEBUG("shutdown worker (%i)", shutdown_counter);
 	bool done = true;
@@ -198,8 +194,12 @@ void shutdown_worker(void *arg)
 			px4_systemreset(shutdown_args & SHUTDOWN_ARG_TO_BOOTLOADER);
 
 		} else {
+#if defined(BOARD_HAS_POWER_CONTROL)
 			PX4_WARN("Shutdown NOW. Good Bye.");
 			board_shutdown();
+#else
+			PX4_PANIC("board shutdown not available");
+#endif // BOARD_HAS_POWER_CONTROL
 		}
 
 		pthread_mutex_unlock(&shutdown_mutex); // must NEVER come here
@@ -210,38 +210,32 @@ void shutdown_worker(void *arg)
 	}
 }
 
-int px4_shutdown_request(bool reboot, bool to_bootloader)
+int px4_shutdown_request(bool reboot, bool to_bootloader, uint32_t delay)
 {
-	// fail immediately if the board does not support the requested method
-#if defined BOARD_HAS_NO_RESET
-	if (reboot) {
-		return -EINVAL;
-	}
-
-#endif
-#if !defined(BOARD_HAS_POWER_CONTROL)
-
-	if (!reboot) {
-		return -EINVAL;
-	}
-
-#endif
-
 	if (shutdown_args & SHUTDOWN_ARG_IN_PROGRESS) {
 		return 0;
 	}
 
-	shutdown_args |= SHUTDOWN_ARG_IN_PROGRESS;
-
 	if (reboot) {
+#if defined(BOARD_HAS_NO_RESET)
+		return -EINVAL;
+#else
 		shutdown_args |= SHUTDOWN_ARG_REBOOT;
+
+		if (to_bootloader) {
+			shutdown_args |= SHUTDOWN_ARG_TO_BOOTLOADER;
+		}
+
+#endif
+
+	} else {
+#if !defined(BOARD_HAS_POWER_CONTROL)
+		return -EINVAL;
+#endif
 	}
 
-	if (to_bootloader) {
-		shutdown_args |= SHUTDOWN_ARG_TO_BOOTLOADER;
-	}
-
-	shutdown_worker(nullptr);
+	shutdown_args |= SHUTDOWN_ARG_IN_PROGRESS;
+	work_queue(HPWORK, &shutdown_work, (worker_t)&shutdown_worker, nullptr, USEC2TICK(delay));
 	return 0;
 }
 
